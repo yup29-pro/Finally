@@ -216,6 +216,22 @@ export default function FrictionFeed({
             >
               {location}
             </h2>
+            {analysis?.hierarchy?.display_hierarchy && (
+              <div
+                style={{
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  color: '#38bdf8',
+                  marginTop: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>📍 Hierarchy:</span>
+                <span>{analysis.hierarchy.display_hierarchy}</span>
+              </div>
+            )}
           </div>
 
           <div
@@ -364,29 +380,63 @@ export default function FrictionFeed({
                   : '0 2px 6px rgba(0,0,0,0.3)',
               }}
             >
-              {/* Category and Severity Pill Row */}
+              {/* Category, Distance, and Severity Pill Row */}
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '6px',
                 }}
               >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    background: catMeta.bg,
-                    color: catMeta.color,
-                    padding: '3px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                  }}
-                >
-                  <CatIcon size={12} />
-                  <span>{catMeta.label}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      background: catMeta.bg,
+                      color: catMeta.color,
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <CatIcon size={12} />
+                    <span>{catMeta.label}</span>
+                  </div>
+
+                  {/* Distance Proximity Tag */}
+                  {flag.distance_label && (
+                    <span
+                      style={{
+                        fontSize: '10.5px',
+                        fontFamily: 'var(--font-mono)',
+                        color:
+                          flag.proximity_tier === 'hyperlocal'
+                            ? '#34d399'
+                            : flag.proximity_tier === 'corridor'
+                            ? '#38bdf8'
+                            : '#94a3b8',
+                        background:
+                          flag.proximity_tier === 'hyperlocal'
+                            ? 'rgba(52, 211, 153, 0.12)'
+                            : 'rgba(56, 189, 248, 0.08)',
+                        border: `1px solid ${
+                          flag.proximity_tier === 'hyperlocal'
+                            ? 'rgba(52, 211, 153, 0.25)'
+                            : 'rgba(56, 189, 248, 0.2)'
+                        }`,
+                        padding: '2px 7px',
+                        borderRadius: '4px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      📍 {flag.distance_label}
+                    </span>
+                  )}
                 </div>
 
                 <div
