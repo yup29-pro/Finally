@@ -8,11 +8,14 @@ import {
   WifiOff,
   AlertCircle,
   Sparkles,
-  Info
+  Info,
+  LogOut,
+  UserCheck
 } from 'lucide-react';
 import MapCanvas from './components/MapCanvas';
 import FrictionFeed from './components/FrictionFeed';
 import ReceiptDrawer from './components/ReceiptDrawer';
+import OnboardingFlow from './components/OnboardingFlow';
 import {
   SAMPLE_PRESETS,
   SAMPLE_ANALYSES,
@@ -20,7 +23,17 @@ import {
 } from './data/sampleData';
 
 export default function App() {
-  // State
+  // Authentication & Flow State
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('plottwistt_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Map & Radar States
   const [selectedLocation, setSelectedLocation] = useState(
     SAMPLE_PRESETS[0].name
   );
@@ -52,6 +65,11 @@ export default function App() {
     } catch {
       setBackendConnected(false);
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('plottwistt_user');
+    setCurrentUser(null);
   };
 
   // Perform Analysis Scan
@@ -94,7 +112,6 @@ export default function App() {
       setErrorNotice(
         'Backend server (localhost:8000) is unreachable. Automatically loaded verified offline sample data for this location.'
       );
-      // Seamlessly fallback to sample data
       const sample = getSampleAnalysis(selectedLocation, intent);
       setAnalysis(sample);
     } finally {
@@ -102,6 +119,12 @@ export default function App() {
     }
   };
 
+  // If user has not completed onboarding/login flow, render 3-Slide Interactive Globe + Auth
+  if (!currentUser) {
+    return <OnboardingFlow onComplete={(user) => setCurrentUser(user)} />;
+  }
+
+  // Once authenticated, render the full Radar Map & Audit Feed Console
   return (
     <div
       style={{
@@ -176,9 +199,27 @@ export default function App() {
           </div>
         </div>
 
-        {/* Backend & Mode Controls */}
+        {/* Backend, User & Mode Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          {/* Backend Status Indicator */}
+          {/* Active User Badge */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '12px',
+              color: '#cbd5e1',
+              background: 'rgba(255, 255, 255, 0.05)',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+            }}
+          >
+            <UserCheck size={14} color="#38bdf8" />
+            <span>{currentUser.name}</span>
+          </div>
+
+          {/* Backend Status Pill */}
           <div
             style={{
               display: 'flex',
@@ -251,6 +292,27 @@ export default function App() {
               style={{ display: 'none' }}
             />
           </label>
+
+          {/* Logout / Intro Walkthrough Button */}
+          <button
+            onClick={handleLogout}
+            title="Return to Presentation / Logout"
+            style={{
+              background: 'transparent',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#94a3b8',
+              padding: '5px 10px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            <LogOut size={13} />
+            <span>Intro</span>
+          </button>
         </div>
       </header>
 
@@ -289,7 +351,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Split Layout: Left MapCanvas, Right FrictionFeed */}
+      {/* Main Split Layout: Left Clean MapCanvas, Right FrictionFeed */}
       <div
         style={{
           flex: 1,
@@ -299,7 +361,7 @@ export default function App() {
           overflow: 'hidden',
         }}
       >
-        {/* Left Column: MapCanvas */}
+        {/* Left Column: MapCanvas (Clean without preset clutter) */}
         <section
           style={{
             position: 'relative',

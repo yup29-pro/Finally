@@ -148,32 +148,9 @@ export default function MapCanvas({
     map.setView([coordinates.lat, coordinates.lng], map.getZoom(), { animate: true });
   }, [coordinates, overallRisk]);
 
-  // Render Preset pins on map
+  // Render Preset pins on map (DISABLED: clean map display per option 2)
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    if (presetMarkersGroupRef.current) {
-      map.removeLayer(presetMarkersGroupRef.current);
-    }
-
-    const group = L.layerGroup();
-    SAMPLE_PRESETS.forEach((preset) => {
-      const marker = L.marker([preset.lat, preset.lng], {
-        icon: createPresetIcon(),
-      });
-      marker.on('click', () => {
-        handlePresetClick(preset);
-      });
-      marker.bindTooltip(`<strong>${preset.name}</strong><br/>${preset.description}`, {
-        direction: 'top',
-        className: 'preset-tooltip',
-      });
-      group.addLayer(marker);
-    });
-
-    group.addTo(map);
-    presetMarkersGroupRef.current = group;
+    // Keep presets hidden to prevent cluttering custom address scans
   }, []);
 
   const handlePresetClick = (preset) => {
