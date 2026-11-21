@@ -1,9 +1,10 @@
 """SerpApi multi-angle collector and geocoding helper for PlotTwistt.
 
 Provides:
-- Hierarchical location categorization (Ward/Sub-locality -> Locality -> Corridor -> Taluk/City)
-- Multi-query signal harvesting across hyper-local sources (crime, civic, roads, disputes, power)
-- Distance estimation from target coordinates
+- Strict local geographic extraction (ignores broad state/country keywords like 'Karnataka')
+- Hierarchical location categorization (Locality -> Neighborhood -> Corridor -> City)
+- Strict negative filtering against distant, unrelated Bangalore hubs (e.g., BTM, Whitefield, Silk Board)
+- Proximity-based signal queries tailored strictly to the targeted sector
 """
 
 from __future__ import annotations
@@ -20,63 +21,80 @@ logger = logging.getLogger("plottwistt.collector")
 
 SERPAPI_URL = "https://serpapi.com/search.json"
 
-
-def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate Great Circle distance between two points in kilometers."""
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return round(R * c, 2)
+# Unrelated distant localities to reject when searching a specific corridor
+DISTANT_LOCALITIES_FILTER = [
+    "btm", "btm layout", "silk board", "varthur", "panathur", "whitefield",
+    "electronic city", "sarjapur", "bellandur", "marathahalli", "hebbal",
+    "yelahanka", "banashankari", "koramangala", "indiranagar"
+]
 
 
-def clean_door_address(address: str) -> str:
-    """Strip door numbers, plot markers, and numeric crosses from raw query."""
-    cleaned = re.sub(
-        r"^(?:no\.?|plot|door|flat|survey|sy\.?)\s*[\d\w\-\/]+[,\s]*",
-        "",
-        address,
-        flags=re.IGNORECASE,
-    ).strip()
+def clean_locality_tokens(address: str) -> List[str]:
+    """Extract clean, meaningful sub-locality and corridor names from user address."""
+    # Common typo normalization (e.g. 'Madagi Road' -> 'Magadi Road')
+    normalized = re.sub(r"\bmadagi\b", "Magadi", address, flags=re.I)
+    normalized = re.sub(r"\bbydrahalli\b", "Byadarahalli", normalized, flags=re.I)
 
-    cleaned = re.sub(
-        r"^(\d+(?:st|nd|rd|th)?\s*(?:main|cross|stage|phase|block)?\s*(?:road|rd)?\s*(?:cross|main)?\s*)+",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    ).strip()
+    # Split by comma or semicolon
+    raw_parts = [p.strip() for p in re.split(r"[,;]+", normalized) if p.strip()]
 
-    return cleaned if cleaned and len(cleaned) >= 3 else address.strip()
+    clean_parts: List[str] = []
+    for part in raw_parts:
+        # Strip door/plot/survey numbers
+        p_clean = re.sub(
+            r"^(?:no\.?|plot|door|flat|survey|sy\.?)\s*[\d\w\-\/]+[,\s]*",
+            "",
+            part,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip leading numerical crosses/mains
+        p_clean = re.sub(
+            r"^(\d+(?:st|nd|rd|th)?\s*(?:main|cross|stage|phase|block)?\s*(?:road|rd)?\s*(?:cross|main)?\s*)+",
+            "",
+            p_clean,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # Ignore broad administrative words that pollute queries
+        if p_clean.lower() in ["karnataka", "india", "bengaluru", "bangalore"]:
+            continue
+
+        if len(p_clean) >= 3 and p_clean not in clean_parts:
+            clean_parts.append(p_clean)
+
+    return clean_parts if clean_parts else [normalized.strip()]
 
 
 async def resolve_hierarchical_location(query: str, lat: float | None = None, lng: float | None = None) -> Dict[str, Any]:
-    """Resolve hierarchical location breakdown: Hyperlocal -> Locality -> Corridor -> City."""
+    """Resolve hierarchical location breakdown avoiding state/country dilution."""
     api_key = os.getenv("SERPAPI_API_KEY")
-    clean = clean_door_address(query)
+    tokens = clean_locality_tokens(query)
+
+    hyperlocal = tokens[0] if tokens else "Bengaluru"
+    locality = tokens[1] if len(tokens) >= 2 else hyperlocal
+    corridor = tokens[-1] if len(tokens) >= 3 else (tokens[1] if len(tokens) == 2 else hyperlocal)
 
     hierarchy = {
         "raw_query": query,
-        "hyperlocal": clean.split(",")[0].strip(),
-        "locality": clean.split(",")[0].strip(),
-        "corridor": "Bengaluru",
+        "hyperlocal": hyperlocal,
+        "locality": locality,
+        "corridor": corridor,
         "city": "Bengaluru",
         "resolved_lat": lat or 12.9716,
         "resolved_lng": lng or 77.5946,
-        "display_hierarchy": f"{clean} • Bengaluru",
+        "display_hierarchy": " ❯ ".join([p for p in [hyperlocal, locality, corridor, "Bengaluru"] if p]),
     }
 
     if not api_key:
         return hierarchy
 
-    # Try geocoding with Google Maps via SerpApi to get exact hierarchy & coordinates
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             res = await client.get(
                 SERPAPI_URL,
                 params={
                     "engine": "google_maps",
-                    "q": f"{clean} Bangalore",
+                    "q": f"{hyperlocal} {corridor} Bangalore",
                     "api_key": api_key,
                 },
             )
@@ -92,18 +110,14 @@ async def resolve_hierarchical_location(query: str, lat: float | None = None, ln
                         hierarchy["resolved_lat"] = gps["latitude"]
                         hierarchy["resolved_lng"] = gps["longitude"]
 
-                    address_str = place.get("address", "")
-                    title = place.get("title", clean)
-                    parts = [p.strip() for p in address_str.split(",") if p.strip()]
-
-                    hierarchy["hyperlocal"] = title
-                    if len(parts) >= 2:
-                        hierarchy["locality"] = parts[0]
-                        hierarchy["corridor"] = parts[1] if len(parts) > 2 else parts[0]
-
-                    hierarchy["display_hierarchy"] = " ❯ ".join(
-                        [p for p in [title, hierarchy.get("locality"), hierarchy.get("corridor"), "Bengaluru"] if p]
-                    )
+                    addr_parts = [
+                        p.strip() for p in place.get("address", "").split(",")
+                        if p.strip() and p.strip().lower() not in ["karnataka", "india", "bengaluru", "bangalore"]
+                    ]
+                    if addr_parts:
+                        hierarchy["display_hierarchy"] = " ❯ ".join(
+                            [hyperlocal] + addr_parts[:2] + ["Bengaluru"]
+                        )
     except Exception as e:
         logger.debug("Hierarchy resolution error: %s", e)
 
@@ -113,51 +127,52 @@ async def resolve_hierarchical_location(query: str, lat: float | None = None, ln
 async def collect_location_signals(
     locality: str, intent: str, lat: float | None = None, lng: float | None = None
 ) -> Dict[str, Any]:
-    """Query SerpApi across multiple lenses and local sources to get maximum actionable friction points."""
+    """Harvest strictly localized news and civic friction signals."""
     api_key = os.getenv("SERPAPI_API_KEY")
     if not api_key:
         raise ValueError("SERPAPI_API_KEY environment variable not configured.")
 
-    # 1. Resolve geographic hierarchy & coordinates
+    tokens = clean_locality_tokens(locality)
     hierarchy = await resolve_hierarchical_location(locality, lat, lng)
-    target_lat = hierarchy["resolved_lat"]
-    target_lng = hierarchy["resolved_lng"]
-    clean_loc = hierarchy["hyperlocal"]
+
+    hyperlocal = hierarchy["hyperlocal"]
     corridor = hierarchy["corridor"]
+
+    # Target queries strictly anchoring to the local neighborhood & corridor
+    anchor = f"{hyperlocal} {corridor}".strip() if hyperlocal != corridor else corridor
 
     collected_signals: List[Dict[str, Any]] = []
 
     async with httpx.AsyncClient(timeout=18.0) as client:
-        # Search Queries across 5 distinct angles
         search_targets = [
-            # A: Google News for local neighborhood incidents
+            # 1. Hyper-local news
             {
                 "engine": "google_news",
-                "q": f'"{clean_loc}" Bangalore',
+                "q": f"{anchor} Bangalore",
                 "category": "civic_incident",
             },
-            # B: Google News for corridor transit/accidents/crime
+            # 2. Local crime, police, and law & order in the corridor
             {
                 "engine": "google_news",
-                "q": f"{clean_loc} OR {corridor} Bangalore crime OR police OR accident",
+                "q": f"{corridor} Bangalore police crime OR accident OR protest",
                 "category": "civic_incident",
             },
-            # C: Land disputes, BDA, illegal layouts, and demolition notices
+            # 3. Local land disputes, illegal layouts, and BDA/BBMP demolitions along corridor
             {
                 "engine": "google",
-                "q": f'"{clean_loc}" OR "{corridor}" Bangalore (land dispute OR illegal layout OR demolition OR acquisition OR BDA)',
+                "q": f"{corridor} Bangalore (land dispute OR illegal layout OR demolition OR acquisition OR BDA)",
                 "category": "zoning_buffer_row",
             },
-            # D: Traffic bottlenecks, heavy vehicles, and road conditions
+            # 4. Traffic congestion, road widening, and potholes on corridor
             {
                 "engine": "google",
-                "q": f'"{clean_loc}" OR "{corridor}" Bangalore (traffic jam OR road condition OR bottleneck OR pothole OR truck ban)',
+                "q": f"{corridor} Bangalore (traffic jam OR road condition OR bottleneck OR pothole OR widening)",
                 "category": "civic_neighbor_friction",
             },
-            # E: Flooding, drainage, waterlogging, or power/water supply cuts
+            # 5. Local waterlogging, drainage, and BESCOM power outages
             {
                 "engine": "google",
-                "q": f'"{clean_loc}" OR "{corridor}" Bangalore (waterlogging OR flood OR drain overflow OR BESCOM power shutdown OR water tanker)',
+                "q": f"{corridor} Bangalore (waterlogging OR flood OR drain overflow OR BESCOM power shutdown)",
                 "category": "flooding_drainage",
             },
         ]
@@ -179,46 +194,54 @@ async def collect_location_signals(
                     continue
 
                 data = res.json()
-                if st["engine"] == "google_news":
-                    items = data.get("news_results", [])
-                    for it in items[:4]:
-                        src_name = (
-                            it.get("source", {}).get("name", "Local News")
-                            if isinstance(it.get("source"), dict)
-                            else str(it.get("source", "News"))
-                        )
-                        collected_signals.append({
-                            "title": it.get("title", ""),
-                            "url": it.get("link", ""),
-                            "source": src_name,
-                            "date": it.get("date", ""),
-                            "snippet": it.get("snippet", it.get("title", "")),
-                            "category": st["category"],
-                            "origin_target": clean_loc,
-                        })
-                else:
-                    items = data.get("organic_results", [])
-                    for it in items[:4]:
-                        link = it.get("link", "")
-                        if "rajakaluve.org" in link or "youtube.com" in link:
-                            continue
-                        collected_signals.append({
-                            "title": it.get("title", ""),
-                            "url": link,
-                            "source": it.get("displayed_link", "Civic Source"),
-                            "snippet": it.get("snippet", ""),
-                            "category": st["category"],
-                            "origin_target": clean_loc,
-                        })
+                items = data.get("news_results", []) if st["engine"] == "google_news" else data.get("organic_results", [])
+
+                for it in items[:5]:
+                    link = it.get("link", "")
+                    title = it.get("title", "")
+                    snippet = it.get("snippet", title)
+
+                    if not title or "rajakaluve.org" in link or "youtube.com" in link:
+                        continue
+
+                    # STRICT DISTANT SECTOR FILTER:
+                    # If this search is about Magadi Road / Byadarahalli, reject stories explicitly about BTM, Whitefield, Silk Board, etc.
+                    text_lower = f"{title} {snippet}".lower()
+                    target_lower = f"{hyperlocal} {corridor}".lower()
+                    
+                    is_distant = False
+                    for distant_loc in DISTANT_LOCALITIES_FILTER:
+                        # If the story explicitly focuses on a distant locality not in the user query
+                        if distant_loc in text_lower and distant_loc not in target_lower:
+                            # Verify if target corridor is absent from this story
+                            if not any(token.lower() in text_lower for token in [hyperlocal, corridor] if len(token) > 3):
+                                is_distant = True
+                                break
+
+                    if is_distant:
+                        continue
+
+                    src_name = (
+                        it.get("source", {}).get("name", "Local News")
+                        if isinstance(it.get("source"), dict)
+                        else it.get("source", it.get("displayed_link", "Civic Report"))
+                    )
+
+                    collected_signals.append({
+                        "title": title,
+                        "url": link,
+                        "source": src_name,
+                        "snippet": snippet,
+                        "category": st["category"],
+                        "target_anchor": anchor,
+                    })
             except Exception as e:
-                logger.debug("Signal angle query '%s' failed: %s", st["q"], e)
+                logger.debug("Signal error for query '%s': %s", st["q"], e)
 
     return {
-        "locality": clean_loc,
+        "locality": hyperlocal,
         "corridor": corridor,
         "hierarchy": hierarchy,
-        "target_lat": target_lat,
-        "target_lng": target_lng,
         "intent": intent,
         "signals": collected_signals,
         "total_signals": len(collected_signals),
