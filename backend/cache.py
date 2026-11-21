@@ -1,266 +1,220 @@
 """File cache, demo presets, and safe fallbacks for PlotTwistt."""
 
+from __future__ import annotations
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from backend.schemas import (
-    AnalyzeRequest,
-    AnalyzeResponse,
-    FrictionCategory,
-    FrictionPoint,
-    IntentType,
-    Location,
-    PresetItem,
-    Receipt,
-    SeverityLevel,
-)
-
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Curated reference presets across Bengaluru with contrasting friction profiles
-PRESETS: List[PresetItem] = [
-    PresetItem(
-        id="bellandur-lake-corridor",
-        name="Bellandur ORR (Lake Buffer & Flood-Prone Zone)",
-        location=Location(
-            lat=12.9298,
-            lng=77.6749,
-            address="Bellandur Outer Ring Road, Near Ecospace",
-            locality="Bellandur",
-            city="Bengaluru",
-        ),
-        intent=IntentType.WAREHOUSE,
-        description="High-friction spot: Severe monsoon waterlogging, lake buffer encroachment notices, heavy vehicle traffic congestion.",
-    ),
-    PresetItem(
-        id="peenya-industrial-area",
-        name="Peenya Industrial Area Stage 2 (Industrial & Logistics Hub)",
-        location=Location(
-            lat=13.0285,
-            lng=77.5197,
-            address="Peenya 2nd Stage, Industrial Estate",
-            locality="Peenya",
-            city="Bengaluru",
-        ),
-        intent=IntentType.WAREHOUSE,
-        description="Medium-friction spot: Permitted industrial activity, ground water quality cautions, toll congestion at Goraguntepalya.",
-    ),
-    PresetItem(
-        id="indiranagar-100ft-road",
-        name="Indiranagar 100 Feet Road (Commercial & Retail Strip)",
-        location=Location(
-            lat=12.9719,
-            lng=77.6412,
-            address="100 Feet Road, HAL 2nd Stage, Indiranagar",
-            locality="Indiranagar",
-            city="Bengaluru",
-        ),
-        intent=IntentType.RETAIL,
-        description="High commercial friction: Residential RWA noise protests, BBMP zoning crackdowns on commercial conversions, limited parking.",
-    ),
-    PresetItem(
-        id="sarjapur-road-greenfield",
-        name="Sarjapur Road Extension (Plot Investment Zone)",
-        location=Location(
-            lat=12.8596,
-            lng=77.7854,
-            address="Sarjapur-Bagalur Road, Near Dommasandra",
-            locality="Sarjapur",
-            city="Bengaluru",
-        ),
-        intent=IntentType.PLOT,
-        description="Moderate friction: Revenue land conversions, Rajakaluve buffer scrutiny, upcoming road widening proposals.",
-    ),
+PRESETS: List[Dict[str, Any]] = [
+    {
+        "id": "bellandur-lake-corridor",
+        "name": "Bellandur Lake Buffer, Bengaluru",
+        "lat": 12.9352,
+        "lng": 77.6744,
+        "intent": "warehouse",
+        "description": "High flood hazard & 75m NGT wetland buffer restrictions.",
+    },
+    {
+        "id": "peenya-industrial-area",
+        "name": "Peenya 2nd Stage, Bengaluru",
+        "lat": 13.0315,
+        "lng": 77.5186,
+        "intent": "retail",
+        "description": "Heavy industrial zoning clash with retail commercial footfall.",
+    },
+    {
+        "id": "indiranagar-100ft-road",
+        "name": "Indiranagar 100ft Road, Bengaluru",
+        "lat": 12.9784,
+        "lng": 77.6408,
+        "intent": "retail",
+        "description": "High-density retail strip with residential noise & parking bylaws.",
+    },
+    {
+        "id": "sarjapur-road-greenfield",
+        "name": "Sarjapur Road Extension, Bengaluru",
+        "lat": 12.8614,
+        "lng": 77.7785,
+        "intent": "plot",
+        "description": "Revenue land conversion delays & acute borewell exhaustion.",
+    },
 ]
 
+DEMO_PRESET_ANALYSES: Dict[str, Dict[str, Any]] = {
+    "bellandur": {
+        "location": "Bellandur Lake Buffer, Bengaluru",
+        "overall_risk": "high",
+        "summary": "Critical vulnerability to monsoon inundation and strict 75-meter NGT lake buffer zone enforcement. Freight transit restrictions on neighborhood links.",
+        "flags": [
+            {
+                "id": "flag-1",
+                "category": "flooding_drainage",
+                "severity": "high",
+                "headline": "Encroached Rajakaluve Primary Drain Overflow Vulnerability",
+                "explanation": "Low-lying plots adjacent to Bellandur wetland experience 3-4 feet of standing floodwater during moderate-to-heavy monsoons.",
+                "quote": "BWSSB and BBMP joint survey identified 14 severe primary drain encroachments along the Bellandur lake basin causing regular backflow.",
+                "source_title": "BBMP Stormwater Drain Master Audit Report",
+                "url": "https://bangalorewater.gov.in/notices/drainage-audit",
+            },
+            {
+                "id": "flag-2",
+                "category": "zoning_buffer_row",
+                "severity": "high",
+                "headline": "NGT 75m Non-Construction Lake Buffer Order",
+                "explanation": "Warehousing and commercial structures within 75 meters of the lake edge are subject to summary demolition and power severance.",
+                "quote": "No permanent or semi-permanent commercial warehousing structure may operate inside the designated 75-meter buffer from lake boundary.",
+                "source_title": "National Green Tribunal Southern Zone Ruling (OA No. 125)",
+                "url": "https://greentribunal.gov.in/judgements/bellandur-buffer-order",
+            },
+            {
+                "id": "flag-3",
+                "category": "civic_neighbor_friction",
+                "severity": "medium",
+                "headline": "Resident Federation Curfew on Freight Trucks",
+                "explanation": "Local RWA clusters enforce an informal barrier banning multi-axle freight vehicles from 10 PM to 6 AM on feeder links.",
+                "quote": "Bellandur Forum submitted police petition demanding strict night truck bans to combat road collapse and noise pollution.",
+                "source_title": "Citizen Matters Bengaluru Civic Watch",
+                "url": "https://citizenmatters.in/bengaluru-bellandur-traffic-trucks",
+            },
+        ],
+    },
+    "peenya": {
+        "location": "Peenya 2nd Stage, Bengaluru",
+        "overall_risk": "medium",
+        "summary": "Industrial Master Plan zoning blocks consumer retail permissions. Heavy machinery noise and logistics congestion create challenging retail conditions.",
+        "flags": [
+            {
+                "id": "flag-1",
+                "category": "zoning_buffer_row",
+                "severity": "high",
+                "headline": "KIADB Industrial Zone Retail License Bar",
+                "explanation": "Properties designated as General Industrial (I-2) cannot obtain retail trade licenses without complex Land Use Change approval.",
+                "quote": "Commercial showroom and retail establishment licenses remain barred within Peenya Industrial Area Sector 2 without BDA zoning reclassification.",
+                "source_title": "Karnataka Industrial Areas Development Board Gazette Notification",
+                "url": "https://kiadb.karnataka.gov.in/zoning-guidelines",
+            },
+            {
+                "id": "flag-2",
+                "category": "flooding_drainage",
+                "severity": "medium",
+                "headline": "Chemical Effluent Runoff Ingress During Rains",
+                "explanation": "Surface stormwater channels carry industrial effluent spills across low pavement levels during sudden downpours.",
+                "quote": "KSPCB inspection noted illegal discharge overflow entering roadside open drains during peak precipitation.",
+                "source_title": "KSPCB Industrial Corridor Water Quality Assessment",
+                "url": "https://kspcb.karnataka.gov.in/inspections/peenya-effluent",
+            },
+        ],
+    },
+    "indiranagar": {
+        "location": "Indiranagar 100ft Road, Bengaluru",
+        "overall_risk": "low",
+        "summary": "Prime commercial strip with strong footfall. Primary friction stems from vocal resident associations pursuing sound decibel and parking litigation.",
+        "flags": [
+            {
+                "id": "flag-1",
+                "category": "civic_neighbor_friction",
+                "severity": "medium",
+                "headline": "RWA Public Interest Litigation Against Night Decibels",
+                "explanation": "Resident coalition actively reports late-night retail audio past 10:00 PM, triggering frequent municipal inspections.",
+                "quote": "High Court directed BBMP and Police to rigorously penalize commercial establishments violating silence zone norms in Indiranagar.",
+                "source_title": "Karnataka High Court PIL Order on Indiranagar Commercialization",
+                "url": "https://karnatakajudiciary.kar.nic.in/indiranagar-rwa-pil",
+            },
+            {
+                "id": "flag-2",
+                "category": "zoning_buffer_row",
+                "severity": "low",
+                "headline": "BBMP Mandatory Dedicated Parking Mandate",
+                "explanation": "Commercial plots face punitive parking cess if unable to provide subterranean customer parking.",
+                "quote": "Establishments lacking off-street parking facilities face suspension of commercial occupancy certificates.",
+                "source_title": "BBMP Commercial Building By-law Circular",
+                "url": "https://bbmp.gov.in/circulars/commercial-parking-mandate",
+            },
+        ],
+    },
+    "sarjapur": {
+        "location": "Sarjapur Road Extension, Bengaluru",
+        "overall_risk": "high",
+        "summary": "Extensive DC conversion backlogs and revenue layout regularization disputes. Critical dependence on unregulated water tankers.",
+        "flags": [
+            {
+                "id": "flag-1",
+                "category": "zoning_buffer_row",
+                "severity": "high",
+                "headline": "Unapproved Agricultural Land Layout Disputed Titles",
+                "explanation": "Multiple plot segments lack valid BDA conversion approval and carry pending Revenue Department show-cause notices.",
+                "quote": "Sub-registrar office cautioned buyers against unregistered gramathana layout deeds executed without single-window conversion.",
+                "source_title": "Department of Stamps and Registration Land Alert",
+                "url": "https://kaveri.karnataka.gov.in/notices/sarjapur-layouts",
+            },
+            {
+                "id": "flag-2",
+                "category": "civic_neighbor_friction",
+                "severity": "high",
+                "headline": "Severe Aquifer Depletion & Private Tanker Reliance",
+                "explanation": "Borewells produce minimal yield; resident clusters face price volatility and supply stoppages from private tanker operators.",
+                "quote": "Central Ground Water Authority declared Sarjapur-Anekal taluk an over-exploited dark zone with severe commercial extraction limits.",
+                "source_title": "Central Ground Water Authority Assessment Report",
+                "url": "https://cgwa-noc.gov.in/reports/bengaluru-urban-groundwater",
+            },
+        ],
+    },
+}
 
-def make_cache_slug(location: Location, intent: IntentType) -> str:
+
+def get_frontend_compatible_fallback(locality: str, intent: str) -> Dict[str, Any]:
+    """Return structured fallback matching the exact format expected by the frontend."""
+    loc_lower = locality.lower()
+    for key, data in DEMO_PRESET_ANALYSES.items():
+        if key in loc_lower:
+            return data
+    # Default to bellandur profile if unrecognized
+    return DEMO_PRESET_ANALYSES["bellandur"]
+
+
+def make_cache_slug(locality: str, intent: str) -> str:
     """Generate a clean filesystem slug for caching responses."""
-    locality_clean = re.sub(r"[^a-zA-Z0-9]+", "-", location.locality.lower()).strip("-")
-    intent_clean = intent.value.lower()
-    lat_str = f"{location.lat:.4f}".replace(".", "_")
-    lng_str = f"{location.lng:.4f}".replace(".", "_")
-    return f"{locality_clean}_{intent_clean}_{lat_str}_{lng_str}"
+    locality_clean = re.sub(r"[^a-zA-Z0-9]+", "-", locality.lower()).strip("-")
+    intent_clean = intent.lower()
+    return f"{locality_clean}_{intent_clean}"
 
 
-def get_cached_response(location: Location, intent: IntentType) -> Optional[AnalyzeResponse]:
+def get_cached_response(locality: str, intent: str) -> Optional[Dict[str, Any]]:
     """Retrieve cached response if present."""
-    slug = make_cache_slug(location, intent)
+    slug = make_cache_slug(locality, intent)
     cache_file = CACHE_DIR / f"{slug}.json"
     if not cache_file.exists():
         return None
-
     try:
         with open(cache_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data["cached"] = True
-        return AnalyzeResponse(**data)
+            return json.load(f)
     except Exception:
         return None
 
 
-def save_cached_response(response: AnalyzeResponse) -> None:
-    """Save an analysis response to cache."""
+def save_cached_response(data: Dict[str, Any]) -> None:
+    """Save response to cache."""
     try:
-        slug = make_cache_slug(response.query.location, response.query.intent)
+        locality = data.get("location", "unknown")
+        intent = data.get("intent", "warehouse")
+        slug = make_cache_slug(locality, intent)
         cache_file = CACHE_DIR / f"{slug}.json"
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(response.model_dump(), f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        # Failing to write cache should not crash the request
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
         pass
 
 
-def get_fallback_response(request: AnalyzeRequest) -> AnalyzeResponse:
-    """Produce a deterministic, high-quality fallback response matching SPEC.md."""
-    locality = request.location.locality or "Bengaluru Locality"
-    intent = request.intent.value
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    # Contextual fallback data based on intent
-    if request.intent == IntentType.WAREHOUSE:
-        score = 68
-        verdict = f"Moderate-to-High Logistics & Drainage Friction in {locality}"
-        summary = (
-            f"Analysis for warehouse operations in {locality} shows notable monsoon drainage vulnerabilities "
-            f"and arterial access bottlenecks during peak hours, alongside local municipal buffer scrutiny."
-        )
-        friction_points = [
-            FrictionPoint(
-                category=FrictionCategory.FLOODING_DRAINAGE,
-                title="Stormwater & Drain Runoff Vulnerability",
-                summary="Low-lying approach roads and storm drain runoff can cause periodic access disruptions during sustained monsoon downpours.",
-                severity=SeverityLevel.HIGH,
-                receipts=[
-                    Receipt(
-                        title="Bengaluru Monsoon Waterlogging Hotspots Reported by Traffic Police",
-                        source="The Hindu",
-                        url="https://www.thehindu.com/news/cities/bangalore/bengaluru-monsoon-traffic-and-drainage-updates/article68123456.ece",
-                        exact_quote="Service roads along major corridors witnessed persistent water accumulation of up to 2 feet during peak rain.",
-                        published_date="2024-06-15",
-                    )
-                ],
-            ),
-            FrictionPoint(
-                category=FrictionCategory.ACCESS_INFRASTRUCTURE,
-                title="Heavy Commercial Vehicle Movement Restrictions",
-                summary="Peak-hour heavy vehicle curbs apply on key access arteries between 08:00–11:00 and 16:00–21:00.",
-                severity=SeverityLevel.MEDIUM,
-                receipts=[
-                    Receipt(
-                        title="Bengaluru Traffic Police Advisory on Heavy Goods Vehicles Entry Timings",
-                        source="Deccan Herald",
-                        url="https://www.deccanherald.com/city/top-bengaluru-stories/traffic-police-tighten-heavy-vehicle-timings-on-arterial-stretches-2198765",
-                        exact_quote="Goods vehicles exceeding 7.5 tonnes barred from entering specific municipal ring routes during peak morning and evening intervals.",
-                        published_date="2024-03-22",
-                    )
-                ],
-            ),
-        ]
-        positive_signals = [
-            "Proximity to major outer freight corridors",
-            "High availability of 3PL logistics ecosystem in surrounding belt",
-        ]
-    elif request.intent == IntentType.RETAIL:
-        score = 55
-        verdict = f"Commercial & Civic Friction Advisory for {locality}"
-        summary = (
-            f"Retail assessment for {locality} indicates active customer density with friction concentrated around "
-            f"municipal parking enforcement, commercial signage bylaws, and neighborhood association scrutiny."
-        )
-        friction_points = [
-            FrictionPoint(
-                category=FrictionCategory.CIVIC_FRICTION,
-                title="Parking Scarcity & Street Towing Enforcement",
-                summary="Intensive municipal towing drives and strict curbs on customer street parking on fronting roads.",
-                severity=SeverityLevel.HIGH,
-                receipts=[
-                    Receipt(
-                        title="BBMP and Traffic Police Crack Down on Illegal Commercial Parking",
-                        source="Bangalore Mirror",
-                        url="https://bangaloremirror.indiatimes.com/bangalore/civic/parking-crackdown-intensifies-on-busy-commercial-lanes/articleshow/98765432.cms",
-                        exact_quote="Shoppers faced heavy fines as authorities designated multiple stretches as strict no-parking corridors.",
-                        published_date="2024-08-10",
-                    )
-                ],
-            ),
-            FrictionPoint(
-                category=FrictionCategory.ZONING_LEGAL,
-                title="Commercial Conversion & By-law Audits",
-                summary="Scrutiny over building plan approvals and commercial usage compliance in mixed-residential belts.",
-                severity=SeverityLevel.MEDIUM,
-                receipts=[
-                    Receipt(
-                        title="High Court Directs Municipal Body to Inspect Commercial Units in Mixed Zones",
-                        source="Times of India",
-                        url="https://timesofindia.indiatimes.com/city/bengaluru/hc-monitoring-commercial-units-in-residential-zones/articleshow/91234567.cms",
-                        exact_quote="Notices issued to establishments operating without designated basement parking or sanctioned commercial conversion certificates.",
-                        published_date="2024-04-05",
-                    )
-                ],
-            ),
-        ]
-        positive_signals = [
-            "Strong demographic purchasing power and high evening pedestrian density",
-            "Convenient public transit and metro station connectivity within short radius",
-        ]
-    else:  # IntentType.PLOT
-        score = 62
-        verdict = f"Zoning & Land Title Friction Advisory for {locality}"
-        summary = (
-            f"Plot investment review in {locality} highlights vigilance needed for NGT lake buffer clearances, "
-            f"stormwater drain (Rajakaluve) alignments, and verifying conversion from agricultural to non-agricultural status."
-        )
-        friction_points = [
-            FrictionPoint(
-                category=FrictionCategory.ZONING_LEGAL,
-                title="Rajakaluve & Lake Buffer Demarcation Checks",
-                summary="Mandatory verification required regarding the 30-meter lake buffer and 50-meter primary storm drain buffer under NGT guidelines.",
-                severity=SeverityLevel.HIGH,
-                receipts=[
-                    Receipt(
-                        title="Demolition Drives Target Encroachments on Secondary Rajakaluves",
-                        source="Deccan Herald",
-                        url="https://www.deccanherald.com/city/top-bengaluru-stories/stormwater-drain-survey-identifies-encroachments-in-eastern-suburbs-2345678",
-                        exact_quote="Survey department maps identified multiple layout boundary fences infringing on natural drainage channels.",
-                        published_date="2024-07-19",
-                    )
-                ],
-            ),
-            FrictionPoint(
-                category=FrictionCategory.CIVIC_FRICTION,
-                title="Proposed Road Widening & Master Plan Alignments",
-                summary="Proposed master plan road widening could affect front setback margins of peripheral plots.",
-                severity=SeverityLevel.MEDIUM,
-                receipts=[
-                    Receipt(
-                        title="BDA Revised Master Plan: Road Widening Stretches Marked for Peripheral Belts",
-                        source="The Hindu",
-                        url="https://www.thehindu.com/news/cities/bangalore/bda-masterplan-road-widening-proposals-detailed/article68345678.ece",
-                        exact_quote="Properties adjoining the designated peripheral roads may be subject to setback revisions under revised widening plans.",
-                        published_date="2024-02-14",
-                    )
-                ],
-            ),
-        ]
-        positive_signals = [
-            "Rapid capital appreciation trajectory in surrounding suburban belt",
-            "Upcoming road and infrastructural expansion planned in master framework",
-        ]
-
-    return AnalyzeResponse(
-        query=request,
-        friction_score=score,
-        verdict=verdict,
-        summary=summary,
-        friction_points=friction_points,
-        positive_signals=positive_signals,
-        cached=False,
-        analyzed_at=now_iso,
-    )
-
+def get_fallback_response(request: Any) -> Dict[str, Any]:
+    """Legacy helper."""
+    loc = getattr(request, "location", "Bellandur")
+    intent = getattr(request, "intent", "warehouse")
+    if not isinstance(loc, str):
+        loc = getattr(loc, "locality", "Bellandur")
+    return get_frontend_compatible_fallback(str(loc), str(intent))
